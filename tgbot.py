@@ -22,19 +22,16 @@ from mcp.client.sse import sse_client
 
 backend = 'llamacpp'
 
-async def llamacpp_complete(system, user):
+async def llamacpp_complete(discussion):
     server = os.environ['LLAMACPP_SERVER']
     # Cut at last / to get the server name
     server = server[:server.rfind('/')]
     url = f"{server}/apply-template"
     print("url is ", url)
-    data = {
-        'messages': [
-            {"role":"system", "content":system},
-            {"role":"user", "content":user}
-        ]
-    }
     headers = {'Content-Type': 'application/json'}
+    data = {
+        "messages": discussion,
+    }
     async with aiohttp.ClientSession() as session:
         async with session.post(url, data=json.dumps(data), headers=headers) as response:
             prompt = await response.json()
@@ -54,9 +51,9 @@ async def llamacpp_complete(system, user):
             return json.loads(response_text)['content']
 
 # Create a function that continues the request and make "prompt" bigger to retain context
-async def continue_prompt(system, user, max_tokens=512):
+async def continue_prompt(discussion, max_tokens=512):
     if backend == 'llamacpp':
-        content = await llamacpp_complete(system, user)
+        content = await llamacpp_complete(discussion)
     else:
         raise ValueError(f'{backend} is not in the list of supported backends')
 
@@ -87,6 +84,7 @@ async def ast_run(node, out):
                 
         if func == "say":
             out['say'] = obj['args'][0]
+            return None
 
         if not func in functions:
             print(f"Function {func} not found", functions.keys())
@@ -122,42 +120,55 @@ async def pseudo_py_run(s, out):
 
 async def complete(client: telethon.TelegramClient, event, msg, prompt):
     prompt = prompt + msg
-    ret = await continue_prompt(prompt, msg)
-    await event.reply(f"{ret}")
-    
-    reply = ""
-    for l in ret.split("\n"):
-        print("Parsing", l)
-        try:
-            out = {}
-            py = await pseudo_py_run(l, out)
-            if py:
-                print("py is ", py)
-                if 'type' in py['result']:
-                    if py['result']['type'] == 'text':
-                        reply += py['result']['text'] + "\n"
-                    elif py['result']['type'] == 'image':
-                        # Store py['resut']['image'] in a temporary file named .jpg and send it
-                        f = tempfile.NamedTemporaryFile(suffix=".jpg")
-                        f.write(py['result']['image'].getbuffer())
-                        f.seek(0)
-                        await client.send_file(event.chat_id, f)
-            if 'say' in out:
-                reply += out['say'] + "\n"
-        except SyntaxError as e:
-            reply = "Invalid syntax"
-            break
+    discussion = [
+        {"role":"system", "content":prompt},
+        {"role":"user", "content":msg}
+    ]
+    done = False
+    for i in range(5):
+        ret = await continue_prompt(discussion)
+        discussion.append({"role":"assistant", "content":ret})
+        await event.reply(f"{ret}")
 
-    if reply:
-        await event.reply(reply)
+        reply = ""
+        for l in ret.split("\n"):
+            print("Parsing", l)
+            try:
+                out = {}
+                py = await pseudo_py_run(l, out)
+                if py:
+                    print("py is ", py)
+                    if 'type' in py['result']:
+                        if py['result']['type'] == 'text':
+                            discussion.append({"role":"system", "content":py['result']['text']})
+                        elif py['result']['type'] == 'image':
+                            # Store py['resut']['image'] in a temporary file named .jpg and send it
+                            f = tempfile.NamedTemporaryFile(suffix=".jpg")
+                            f.write(py['result']['image'].getbuffer())
+                            f.seek(0)
+                            await client.send_file(event.chat_id, f)
+                            done = True
+                            break
+                if 'say' in out:
+                    done = True
+                    reply += out['say'] + "\n"
+            except SyntaxError as e:
+                reply = "Invalid syntax"
+                break
+
+        if reply:
+            await event.reply(reply)
+        if done:
+            break
 
 
 async def get_prompt():
     prompt = f"""
 You are a telegram bot, whose function is to do what your user tells you to do.
-You answer with function calls.
+You answer with function calls. You can call multiple functions
 Example:
 say("Hello, world!")
+say("It's a beautiful day!")
 
 Current time is {datetime.now().strftime('%Y-%m-%d %H:%S')}.
 
@@ -298,6 +309,16 @@ async def connect_to_sse_mcp_server(server_config: dict):
             await connect_to_mcp_server(server_config, session)
 
 
+async def whisper_cpp_transcribe(wavfile):
+    async with aiohttp.ClientSession() as session:
+        with open(wavfile, 'rb') as wav_io:
+            form = aiohttp.FormData()
+            form.add_field("file", wav_io, filename = "audio.wav", content_type = "audio/wav")
+            async with session.post(os.environ['WHISPERCPP_SERVER'], data=form) as response:
+                # Handle the response
+                j = await response.json()
+                return j['text']
+
 server_sessions = {}
 
 async def main():
@@ -337,7 +358,25 @@ async def main():
             if event.message.peer_id.user_id != owner:
                 return
             
-            await complete(client, event, event.message.message, await get_prompt())
+            msg = event.message.message
+            if not msg:
+                # Check if there is an audio file
+                if event.message.media:
+                    if isinstance(event.message.media, telethon.tl.types.MessageMediaDocument):
+                        print("Received document", event.message.media)
+                        if event.message.media.document.mime_type == 'audio/ogg':
+                            print("Received audio file")
+                            file = await client.download_media(event.message)
+                            print("Downloaded file", file)
+                            os.system(f"ffmpeg -y -i {file} -ac 1 -ar 16000  audio.wav")
+                            msg = await whisper_cpp_transcribe('audio.wav')
+                            msg = msg.strip().rstrip()
+                            print("Transcribed", msg)
+                            #os.remove(file)
+                            #os.remove('audio.wav')
+
+            if msg:
+                await complete(client, event, msg, await get_prompt())
 
         await client.run_until_disconnected()
 
