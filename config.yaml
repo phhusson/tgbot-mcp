@@ -1,0 +1,13 @@
+owner: 505442206
+mode: owner_only
+mcp_servers:
+  hn_server:
+    command:
+      - "node"
+      - "/home/phh/MCP/hn-server/build/index.js"
+  stockflow:
+    command:
+      - "/home/phh/MCP/venv/bin/python"
+      - "/home/phh/MCP/mcp-stockflow/stockflow.py"
+    allowlist:
+      - "get_stock_data_v2"
