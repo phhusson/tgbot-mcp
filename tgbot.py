@@ -18,7 +18,7 @@ import yaml
 import mcp
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-
+from mcp.client.sse import sse_client
 
 backend = 'llamacpp'
 
@@ -225,61 +225,77 @@ def create_tool_function(sn: str, session: ClientSession, tool: mcp.types.Tool):
             return None
     return tool_function
 
-async def connect_to_mcp_server(serverParameters: StdioServerParameters, server_config: dict):
+async def connect_to_mcp_server(server_config: dict, session: ClientSession):
+    init_result = await session.initialize()
+    print("Initialized session", init_result)
+    sn = init_result.serverInfo.name
+    sn = sn.replace(" ", "_")
+    sn = sn.replace("-", "_")
+    descr = f"Module {sn}:\n"
+    if 'additional_prompt' in server_config:
+        descr += server_config['additional_prompt'] + "\n"
+    print("Connected session to", init_result.serverInfo.name)
+    prompts = None
+    resources = None
+    tools = None
+    if init_result.capabilities.prompts:
+        prompts = await session.list_prompts()
+        print("Got prompts", prompts)
+    if init_result.capabilities.resources:
+        resources = await session.list_resources()
+        print("Got resources", resources)
+    if init_result.capabilities.tools:
+        tools = await session.list_tools()
+        for tool in tools.tools:
+            print("Got tool", tool)
+            if 'allowlist' in server_config:
+                if not tool.name in server_config['allowlist']:
+                    print("Skipping")
+                    continue
+
+            toolName = f"{sn}.{tool.name}"
+            functions[toolName] = create_tool_function(sn, session, tool)
+            print(tool.inputSchema)
+            argsDesc = ""
+            args = []
+            props = tool.inputSchema['properties']
+            for arg in props:
+                # I'm lazy so for the moment only list required arguments
+                if 'required' in tool.inputSchema and arg in tool.inputSchema['required']:
+                    if not argsDesc:
+                        argsDesc = "-- "
+                    p = props[arg]
+                    if 'description' in p:
+                        argsDesc += f"{arg}: {p['type']} ({p['description']}); "
+                    else:
+                        argsDesc += f"{arg}: {p['type']}; "
+                    args.append(arg)
+            args = [f"{arg}=..." for arg in args]
+            args = ", ".join(args)
+            descr += f"{toolName}({args}) {tool.description} {argsDesc}"
+            module_descriptions.append(descr)
+    server_sessions[init_result.serverInfo.name] = session
+    # Loop forever to keep the connection alive
+    while True:
+        await asyncio.sleep(1)
+
+async def connect_to_stdio_mcp_server(server_config: dict):
+    command = server_config['command']
+    env = os.environ.copy()
+    if 'env' in server_config:
+        env = server_config['env']
+    serverParameters = StdioServerParameters(command=command[0], args = command[1:], env = env)
     async with stdio_client(serverParameters) as (read, write):
         async with ClientSession(read, write) as session:
-            init_result = await session.initialize()
-            print("Initialized session", init_result)
-            sn = init_result.serverInfo.name
-            sn = sn.replace(" ", "_")
-            sn = sn.replace("-", "_")
-            descr = f"Module {sn}:\n"
-            if 'additional_prompt' in server_config:
-                descr += server_config['additional_prompt'] + "\n"
-            print("Connected session to", init_result.serverInfo.name)
-            prompts = None
-            resources = None
-            tools = None
-            if init_result.capabilities.prompts:
-                prompts = await session.list_prompts()
-                print("Got prompts", prompts)
-            if init_result.capabilities.resources:
-                resources = await session.list_resources()
-                print("Got resources", resources)
-            if init_result.capabilities.tools:
-                tools = await session.list_tools()
-                for tool in tools.tools:
-                    print("Got tool", tool)
-                    if 'allowlist' in server_config:
-                        if not tool.name in server_config['allowlist']:
-                            print("Skipping")
-                            continue
+            await connect_to_mcp_server(server_config, session)
 
-                    toolName = f"{sn}.{tool.name}"
-                    functions[toolName] = create_tool_function(sn, session, tool)
-                    print(tool.inputSchema)
-                    argsDesc = ""
-                    args = []
-                    props = tool.inputSchema['properties']
-                    for arg in props:
-                        # I'm lazy so for the moment only list required arguments
-                        if 'required' in tool.inputSchema and arg in tool.inputSchema['required']:
-                            if not argsDesc:
-                                argsDesc = "-- "
-                            p = props[arg]
-                            if 'description' in p:
-                                argsDesc += f"{arg}: {p['type']} ({p['description']}); "
-                            else:
-                                argsDesc += f"{arg}: {p['type']}; "
-                            args.append(arg)
-                    args = [f"{arg}=..." for arg in args]
-                    args = ", ".join(args)
-                    descr += f"{toolName}({args}) {tool.description} {argsDesc}"
-                    module_descriptions.append(descr)
-            server_sessions[init_result.serverInfo.name] = session
-            # Loop forever to keep the connection alive
-            while True:
-                await asyncio.sleep(1)
+
+async def connect_to_sse_mcp_server(server_config: dict):
+    url = server_config['endpoint']
+    print("URL is", url)
+    async with sse_client(url) as (read, write):
+        async with ClientSession(read, write) as session:
+            await connect_to_mcp_server(server_config, session)
 
 
 server_sessions = {}
@@ -304,12 +320,11 @@ async def main():
     for server in mcp_servers:
         server = mcp_servers[server]
         print("Connecting to", server)
-        command = server['command']
-        env = os.environ.copy()
-        if 'env' in server:
-            env = server['env']
-        server_config = StdioServerParameters(command=command[0], args = command[1:], env = env)
-        asyncio.create_task(connect_to_mcp_server(server_config, server))
+
+        if 'command' in server:
+            asyncio.create_task(connect_to_stdio_mcp_server(server))
+        elif 'endpoint' in server:
+            asyncio.create_task(connect_to_sse_mcp_server(server))
 
     client = await telethon.TelegramClient('bot', api_id, api_hash).start(bot_token=bot)
     async with client:
