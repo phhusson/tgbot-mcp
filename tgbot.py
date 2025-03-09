@@ -7,9 +7,11 @@ from aioconsole import aprint
 import os
 import aiohttp
 import sys
+import base64
+import tempfile
 
 from datetime import datetime
-from datetime import timedelta
+import io
 import ast
 import yaml
 
@@ -62,7 +64,7 @@ async def continue_prompt(system, user, max_tokens=512):
     return content
 
 functions = {}
-functions_descriptions = {}
+module_descriptions = []
 
 async def ast_run(node, out):
     if isinstance(node, ast.Module):
@@ -118,7 +120,7 @@ async def pseudo_py_run(s, out):
     res = await ast_run(tree, out)
     return res
 
-async def complete(client, event, msg, prompt):
+async def complete(client: telethon.TelegramClient, event, msg, prompt):
     prompt = prompt + msg
     ret = await continue_prompt(prompt, msg)
     await event.reply(f"{ret}")
@@ -131,6 +133,15 @@ async def complete(client, event, msg, prompt):
             py = await pseudo_py_run(l, out)
             if py:
                 print("py is ", py)
+                if 'type' in py['result']:
+                    if py['result']['type'] == 'text':
+                        reply += py['result']['text'] + "\n"
+                    elif py['result']['type'] == 'image':
+                        # Store py['resut']['image'] in a temporary file named .jpg and send it
+                        f = tempfile.NamedTemporaryFile(suffix=".jpg")
+                        f.write(py['result']['image'].getbuffer())
+                        f.seek(0)
+                        await client.send_file(event.chat_id, f)
             if 'say' in out:
                 reply += out['say'] + "\n"
         except SyntaxError as e:
@@ -151,7 +162,7 @@ say("Hello, world!")
 Current time is {datetime.now().strftime('%Y-%m-%d %H:%S')}.
 
 Available functions:
-{"\n".join(functions_descriptions.values())}
+{"\n\n".join(module_descriptions)}
 """
 
     prompt += "\n\n"
@@ -177,9 +188,41 @@ def create_tool_function(sn: str, session: ClientSession, tool: mcp.types.Tool):
     async def tool_function(*args, **kwargs):
         tool_name = f"{sn}.{tool.name}"
         print(f"Calling tool {tool_name} with args (ignored) {args} and kwargs {kwargs}")
+        # We might have to convert integers to strings, check the schema
+        for key in kwargs:
+            if key in tool.inputSchema['properties']:
+                if tool.inputSchema['properties'][key]['type'] == 'string':
+                    kwargs[key] = str(kwargs[key])
+
         result = await session.call_tool(tool.name, kwargs)
-        print(f"Got result {result}")
-        return result
+
+
+        if result.isError:
+            print(f"Error calling {tool_name}: {result.content}")
+            return f"Error calling {tool_name}: {result.content}"
+        content = result.content
+
+        if len(content) != 1:
+            print("Unknown content", content)
+            return None
+        content = content[0]
+
+        if content.type == 'image':
+            print("Got image", len(content.data))
+        else:
+            print(f"Got result {result}")
+
+        if content.type == 'text':
+            return {"text":content.text, "type":"text"}
+        elif content.type == 'image':
+            # debase64 content.data
+            data = base64.b64decode(content.data)
+            data = io.BytesIO(data)
+
+            return {"image": data, "type":"image"}
+        else:
+            print("unknown content type", content.type)
+            return None
     return tool_function
 
 async def connect_to_mcp_server(serverParameters: StdioServerParameters, server_config: dict):
@@ -190,6 +233,9 @@ async def connect_to_mcp_server(serverParameters: StdioServerParameters, server_
             sn = init_result.serverInfo.name
             sn = sn.replace(" ", "_")
             sn = sn.replace("-", "_")
+            descr = f"Module {sn}:\n"
+            if 'additional_prompt' in server_config:
+                descr += server_config['additional_prompt'] + "\n"
             print("Connected session to", init_result.serverInfo.name)
             prompts = None
             resources = None
@@ -212,15 +258,24 @@ async def connect_to_mcp_server(serverParameters: StdioServerParameters, server_
                     toolName = f"{sn}.{tool.name}"
                     functions[toolName] = create_tool_function(sn, session, tool)
                     print(tool.inputSchema)
-                    args = ""
+                    argsDesc = ""
+                    args = []
                     props = tool.inputSchema['properties']
                     for arg in props:
                         # I'm lazy so for the moment only list required arguments
                         if 'required' in tool.inputSchema and arg in tool.inputSchema['required']:
-                            if not args:
-                                args = "-- "
-                            args += f"{arg}: {props[arg]['type']} {props[arg]['description']}; "
-                    functions_descriptions[toolName] = f"{toolName} {tool.description} {args}"
+                            if not argsDesc:
+                                argsDesc = "-- "
+                            p = props[arg]
+                            if 'description' in p:
+                                argsDesc += f"{arg}: {p['type']} ({p['description']}); "
+                            else:
+                                argsDesc += f"{arg}: {p['type']}; "
+                            args.append(arg)
+                    args = [f"{arg}=..." for arg in args]
+                    args = ", ".join(args)
+                    descr += f"{toolName}({args}) {tool.description} {argsDesc}"
+                    module_descriptions.append(descr)
             server_sessions[init_result.serverInfo.name] = session
             # Loop forever to keep the connection alive
             while True:
@@ -250,7 +305,10 @@ async def main():
         server = mcp_servers[server]
         print("Connecting to", server)
         command = server['command']
-        server_config = StdioServerParameters(command=command[0], args = command[1:])
+        env = os.environ.copy()
+        if 'env' in server:
+            env = server['env']
+        server_config = StdioServerParameters(command=command[0], args = command[1:], env = env)
         asyncio.create_task(connect_to_mcp_server(server_config, server))
 
     client = await telethon.TelegramClient('bot', api_id, api_hash).start(bot_token=bot)

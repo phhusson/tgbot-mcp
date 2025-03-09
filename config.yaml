@@ -11,3 +11,13 @@ mcp_servers:
       - "/home/phh/MCP/mcp-stockflow/stockflow.py"
     allowlist:
       - "get_stock_data_v2"
+  timeserver:
+    command:
+      - "/home/phh/MCP/venv/bin/python"
+      - "-m"
+      - "mcp_simple_timeserver"
+  meme:
+    command:
+      - "node"
+      - "/home/phh/MCP/meme-mcp/dist/index.js"
+    additional_prompt: "One does not simply: 61579, Drake Hotline Bling: 181913649, Two buttons: 87743020, Change my mind: 129242436, Expanding brain: 93895088, Distracted boyfriend: 112126428, Mocking SpongeBob: 102156234, Surprised Pikachu: 155067746, Is this a pigeon?: 100777631"
