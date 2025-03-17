@@ -84,9 +84,11 @@ module_descriptions = []
 
 async def ast_run(node, out):
     if isinstance(node, ast.Module):
-        if len(node.body) == 0:
-            return None
-        return await ast_run(node.body[0].value, out)
+        ret = None
+        for n in node.body:
+            print("Running", n)
+            ret = await ast_run(n, out)
+        return ret
     elif isinstance(node, ast.Name):
         print("Received name", node.id)
         return node.id
@@ -101,7 +103,7 @@ async def ast_run(node, out):
             "keywords": {kw.arg: await ast_run(kw.value, out) for kw in node.keywords},
         }
                 
-        if func == "say":
+        if func == "say" or func == "main.say":
             out['say'] = obj['args'][0]
             return None
 
@@ -128,6 +130,9 @@ async def ast_run(node, out):
             return left / right
         else:
             print("Received unknown binop", node.op)
+    elif isinstance(node, ast.Expr):
+        print("Received expr", node.value)
+        return await ast_run(node.value, out)
     else:
         print("Received unknown node", node)
         return None
@@ -138,42 +143,44 @@ async def pseudo_py_run(s, out):
     return res
 
 async def complete(client: telethon.TelegramClient, event, msg, prompt):
-    prompt = prompt + msg
     discussion = [
-        {"role":"system", "content":prompt},
-        {"role":"user", "content":msg}
+        {"role":"system", "content": prompt},
+        {"role":"user", "content": msg}
     ]
     done = False
+    print("Completing message from user", msg)
     for i in range(5):
         ret = await continue_prompt(discussion)
         discussion.append({"role":"assistant", "content":ret})
         await event.reply(f"{ret}")
+        print("bip bip bip bip")
 
         reply = ""
-        for l in ret.split("\n"):
-            print("Parsing", l)
-            try:
-                out = {}
-                py = await pseudo_py_run(l, out)
-                if py:
-                    print("py is ", py)
-                    if 'type' in py['result']:
-                        if py['result']['type'] == 'text':
-                            discussion.append({"role":"system", "content":py['result']['text']})
-                        elif py['result']['type'] == 'image':
-                            # Store py['resut']['image'] in a temporary file named .jpg and send it
-                            f = tempfile.NamedTemporaryFile(suffix=".jpg")
-                            f.write(py['result']['image'].getbuffer())
-                            f.seek(0)
-                            await client.send_file(event.chat_id, f)
-                            done = True
-                            break
-                if 'say' in out:
-                    done = True
-                    reply += out['say'] + "\n"
-            except SyntaxError as e:
-                reply = "Invalid syntax"
-                break
+
+        try:
+            out = {}
+            py = await pseudo_py_run(ret, out)
+            if py:
+                print("py is ", py)
+                if 'type' in py['result']:
+                    if py['result']['type'] == 'text':
+                        print("Adding text", py['result']['text'])
+                        discussion.append({"role": "system", "content": py['result']['text']})
+                    elif py['result']['type'] == 'image':
+                        # Store py['resut']['image'] in a temporary file named .jpg and send it
+                        f = tempfile.NamedTemporaryFile(suffix=".jpg")
+                        f.write(py['result']['image'].getbuffer())
+                        f.seek(0)
+                        await client.send_file(event.chat_id, f)
+                        done = True
+                        break
+            if 'say' in out:
+                done = True
+                reply += out['say'] + "\n"
+        except SyntaxError as e:
+            print("Syntax error", e)
+            reply = "Invalid syntax"
+            break
 
         if reply:
             await event.reply(reply)
@@ -261,7 +268,7 @@ async def connect_to_mcp_server(server_config: dict, session: ClientSession):
     sn = init_result.serverInfo.name
     sn = sn.replace(" ", "_")
     sn = sn.replace("-", "_")
-    descr = f"Module {sn}:\n"
+    descr = f"Object {sn}:\n"
     if 'additional_prompt' in server_config:
         descr += server_config['additional_prompt'] + "\n"
     print("Connected session to", init_result.serverInfo.name)
@@ -302,8 +309,8 @@ async def connect_to_mcp_server(server_config: dict, session: ClientSession):
                     args.append(arg)
             args = [f"{arg}=..." for arg in args]
             args = ", ".join(args)
-            descr += f"{toolName}({args}) {tool.description} {argsDesc}"
-            module_descriptions.append(descr)
+            descr += f"\n{toolName}({args}) {tool.description} {argsDesc}\n"
+    module_descriptions.append(descr)
     server_sessions[init_result.serverInfo.name] = session
     # Loop forever to keep the connection alive
     while True:
@@ -391,8 +398,8 @@ async def main():
                             msg = await whisper_cpp_transcribe('audio.wav')
                             msg = msg.strip().rstrip()
                             print("Transcribed", msg)
-                            #os.remove(file)
-                            #os.remove('audio.wav')
+                            os.remove(file)
+                            os.remove('audio.wav')
 
             if msg:
                 await complete(client, event, msg, await get_prompt())
