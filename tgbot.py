@@ -22,25 +22,44 @@ from mcp.client.sse import sse_client
 
 backend = 'llamacpp'
 
-async def llamacpp_complete(discussion):
+async def llamacpp_complete(discussion, no_broken_tokenizer=False):
     server = os.environ['LLAMACPP_SERVER']
     # Cut at last / to get the server name
     server = server[:server.rfind('/')]
     url = f"{server}/apply-template"
     print("url is ", url)
     headers = {'Content-Type': 'application/json'}
+
     data = {
         "messages": discussion,
     }
+
     async with aiohttp.ClientSession() as session:
         async with session.post(url, data=json.dumps(data), headers=headers) as response:
             prompt = await response.json()
     prompt = prompt['prompt']
+
+    brokenTokenizer = False
+    for x in discussion:
+        if not x['content'] in prompt:
+            brokenTokenizer = True
+            break
+    if brokenTokenizer and not no_broken_tokenizer:
+        new_discussion = []
+        for x in discussion:
+            if x['role'] == 'system':
+                new_discussion.append({"role":"user", "content": "System: " + x['content']})
+            else:
+                new_discussion.append(x)
+        discussion = new_discussion
+        return await llamacpp_complete(discussion, no_broken_tokenizer=True)
+
+    print("Prompt is", prompt)
     
     data = {
         'stream': False,
         'cache_prompt': True,
-        'stop': ['<|im_end|>']
+        'stop': ['<|im_end|>','<end_of_turn>']
     }
 
     headers = {'Content-Type': 'application/json'}
