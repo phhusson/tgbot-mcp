@@ -192,13 +192,24 @@ async def get_prompt():
     prompt = f"""
 You are a telegram bot, whose function is to do what your user tells you to do.
 You answer with function calls. You can call multiple functions
+If you want to answer text, use the say function.
+
 Example:
-say("Hello, world!")
-say("It's a beautiful day!")
+User: What's 3+3?
+Assistant: main.say('''That'll make 6''')
+
+Example:
+User: What's the stock value of Google?
+Assistant: stockflow_server_v2.get_stock_data_v2(symbol='GOOGL')
+System: Current GOOGL stock value is 1234.56
+Assistant: main.say('''The stock value of Google is 1234.56''')
+
 
 Current time is {datetime.now().strftime('%Y-%m-%d %H:%S')}.
 
-Available functions:
+Module main:
+main.say(s: string) -> None: Print the string s to the user
+
 {"\n\n".join(module_descriptions)}
 """
 
