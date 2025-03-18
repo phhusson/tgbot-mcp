@@ -279,7 +279,7 @@ async def connect_to_mcp_server(server_config: dict, session: ClientSession):
     sn = init_result.serverInfo.name
     sn = sn.replace(" ", "_")
     sn = sn.replace("-", "_")
-    descr = f"Object {sn}:\n"
+    descr = f"Object {sn}: {{\n"
     if 'additional_prompt' in server_config:
         descr += server_config['additional_prompt'] + "\n"
     print("Connected session to", init_result.serverInfo.name)
@@ -289,11 +289,16 @@ async def connect_to_mcp_server(server_config: dict, session: ClientSession):
     if init_result.capabilities.prompts:
         prompts = await session.list_prompts()
         print("Got prompts", prompts)
+        if len(prompts.prompts) == 1:
+            prompt = await session.get_prompt(prompts.prompts[0].name)
+            print("Got prompt", prompt)
+            descr += '\n' + prompt.messages[0].content.text + '\n'
     if init_result.capabilities.resources:
         resources = await session.list_resources()
         print("Got resources", resources)
     if init_result.capabilities.tools:
         tools = await session.list_tools()
+        descr += '\nTools:\n'
         for tool in tools.tools:
             print("Got tool", tool)
             if 'allowlist' in server_config:
@@ -320,7 +325,8 @@ async def connect_to_mcp_server(server_config: dict, session: ClientSession):
                     args.append(arg)
             args = [f"{arg}=..." for arg in args]
             args = ", ".join(args)
-            descr += f"\n{toolName}({args}) {tool.description} {argsDesc}\n"
+            descr += f"{toolName}({args}) {tool.description} {argsDesc}\n"
+    descr += '}\n'
     module_descriptions.append(descr)
     server_sessions[init_result.serverInfo.name] = session
     # Loop forever to keep the connection alive
