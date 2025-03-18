@@ -346,8 +346,11 @@ async def connect_to_stdio_mcp_server(server_config: dict):
 
 async def connect_to_sse_mcp_server(server_config: dict):
     url = server_config['endpoint']
-    print("URL is", url)
-    async with sse_client(url) as (read, write):
+    headers = {}
+    if 'api_access_token' in server_config:
+        headers['Authorization'] = f"Bearer {server_config['api_access_token']}"
+    print("URL is", url, "headers", headers)
+    async with sse_client(url, headers = headers) as (read, write):
         async with ClientSession(read, write) as session:
             await connect_to_mcp_server(server_config, session)
 
