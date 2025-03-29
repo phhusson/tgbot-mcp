@@ -39,12 +39,15 @@ async def llamacpp_complete(discussion, no_broken_tokenizer=False):
             prompt = await response.json()
     prompt = prompt['prompt']
 
+    # We check that all the messages we sent appear in the generated prompt
+    # If it doesn't, it means it's a broken tokenizer (maybe not supporting system role)
     brokenTokenizer = False
     for x in discussion:
         if not x['content'] in prompt:
             brokenTokenizer = True
             break
     if brokenTokenizer and not no_broken_tokenizer:
+        # Replace all system roles to user roles with System: prefix
         new_discussion = []
         for x in discussion:
             if x['role'] == 'system':
@@ -138,6 +141,14 @@ async def ast_run(node, out):
         return None
 
 async def pseudo_py_run(s, out):
+    a = []
+    for line in s.split("\n"):
+        if line.startswith("Assistant:"):
+            a.append(line[len("Assistant:"):])
+        else:
+            a.append(line)
+    s = "\n".join(a)
+
     tree = ast.parse(s.strip())
     res = await ast_run(tree, out)
     return res
