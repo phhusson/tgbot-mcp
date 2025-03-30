@@ -185,6 +185,8 @@ async def complete(client: telethon.TelegramClient, event, msg, prompt):
                         await client.send_file(event.chat_id, f)
                         done = True
                         break
+            else:
+                discussion.append({"role": "system", "content": "Invalid syntax"})
             if 'say' in out:
                 done = True
                 reply += out['say'] + "\n"
@@ -208,13 +210,6 @@ If you want to answer text, use the say function.
 Example:
 User: What's 3+3?
 Assistant: main.say('''That'll make 6''')
-
-Example:
-User: What's the stock value of Google?
-Assistant: stockflow_server_v2.get_stock_data_v2(symbol='GOOGL')
-System: Current GOOGL stock value is 1234.56
-Assistant: main.say('''The stock value of Google is 1234.56''')
-
 
 Current time is {datetime.now().strftime('%Y-%m-%d %H:%S')}.
 
@@ -298,15 +293,21 @@ async def connect_to_mcp_server(server_config: dict, session: ClientSession):
     resources = None
     tools = None
     if init_result.capabilities.prompts:
-        prompts = await session.list_prompts()
-        print("Got prompts", prompts)
-        if len(prompts.prompts) == 1:
-            prompt = await session.get_prompt(prompts.prompts[0].name)
-            print("Got prompt", prompt)
-            descr += '\n' + prompt.messages[0].content.text + '\n'
+        try:
+            prompts = await session.list_prompts()
+            print("Got prompts", prompts)
+            if len(prompts.prompts) == 1:
+                prompt = await session.get_prompt(prompts.prompts[0].name)
+                print("Got prompt", prompt)
+                descr += '\n' + prompt.messages[0].content.text + '\n'
+        except Exception as e:
+            print("Error getting prompts", e)
     if init_result.capabilities.resources:
-        resources = await session.list_resources()
-        print("Got resources", resources)
+        try:
+            resources = await session.list_resources()
+            print("Got resources", resources)
+        except Exception as e:
+            print("Error getting resources", e)
     if init_result.capabilities.tools:
         tools = await session.list_tools()
         descr += '\nTools:\n'
@@ -318,6 +319,7 @@ async def connect_to_mcp_server(server_config: dict, session: ClientSession):
                     continue
 
             toolName = f"{sn}.{tool.name}"
+            toolName = toolName.replace("-", "_")
             functions[toolName] = create_tool_function(sn, session, tool)
             print(tool.inputSchema)
             argsDesc = ""
@@ -373,6 +375,7 @@ async def whisper_cpp_transcribe(wavfile):
             form.add_field("file", wav_io, filename = "audio.wav", content_type = "audio/wav")
             async with session.post(os.environ['WHISPERCPP_SERVER'], data=form) as response:
                 # Handle the response
+                print(await response.text())
                 j = await response.json()
                 return j['text']
 
