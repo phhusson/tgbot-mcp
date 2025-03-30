@@ -141,6 +141,11 @@ async def ast_run(node, out):
         return None
 
 async def pseudo_py_run(s, out):
+    if """```tool_call""" in s:
+        # Extract the section inside the tool_call
+        s = s[s.find("```tool_call") + len("```tool_call"):]
+        s = s[:s.find("```")]
+        s = s.strip()
     a = []
     for line in s.split("\n"):
         if line.startswith("Assistant:"):
