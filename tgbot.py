@@ -72,10 +72,34 @@ async def llamacpp_complete(discussion, no_broken_tokenizer=False):
             response_text = await response.text()
             return json.loads(response_text)['content']
 
+async def mistral_complete(discussion):
+    data = {
+        'model': 'mistral-small-latest'
+    }
+    new_discussion = [discussion[0]]
+    # Mistral don't support multiple system roles
+    for x in discussion[1:]:
+        if x['role'] == 'system':
+            new_discussion.append({"role":"user", "content": "System: " + x['content']})
+        else:
+            new_discussion.append(x)
+    discussion = new_discussion
+    data['messages'] = discussion
+
+    headers = {'Content-Type': 'application/json', 'Authorization': "Bearer " + os.environ['MISTRAL_API_KEY']}
+    async with aiohttp.ClientSession() as session:
+        async with session.post('https://api.mistral.ai/v1/chat/completions', data=json.dumps(data), headers=headers) as response:
+            response_text = await response.text()
+            print("Mistral response", response_text)
+            return json.loads(response_text)['choices'][0]['message']['content']
+
+
 # Create a function that continues the request and make "prompt" bigger to retain context
 async def continue_prompt(discussion, max_tokens=512):
     if backend == 'llamacpp':
         content = await llamacpp_complete(discussion)
+    elif backend == 'mistral':
+        content = await mistral_complete(discussion)
     else:
         raise ValueError(f'{backend} is not in the list of supported backends')
 
