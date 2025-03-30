@@ -165,11 +165,19 @@ async def ast_run(node, out):
         return None
 
 async def pseudo_py_run(s, out):
+    # Gemma likes to wrap its tool calling into ```tool_call``` blocks
     if """```tool_call""" in s:
         # Extract the section inside the tool_call
         s = s[s.find("```tool_call") + len("```tool_call"):]
         s = s[:s.find("```")]
         s = s.strip()
+    # That's more a phi4 thing
+    if """```python""" in s:
+        # Extract the section inside the python block
+        s = s[s.find("```python") + len("```python"):]
+        s = s[:s.find("```")]
+        s = s.strip()
+
     a = []
     for line in s.split("\n"):
         if line.startswith("Assistant:"):
